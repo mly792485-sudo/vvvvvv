@@ -92,9 +92,3 @@ jobs:
           path: ${{ runner.temp }}/NoorAlIslam-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
-
-# Important:
-# This workflow intentionally creates an UNSIGNED archive and an unsigned IPA package.
-# An unsigned IPA cannot be installed on a real iPhone or uploaded to App Store Connect.
-# To create a distributable IPA, signing must be added with your Apple certificate,
-# provisioning profile, Team ID, and App Store Connect credentials. Never commit those files.
