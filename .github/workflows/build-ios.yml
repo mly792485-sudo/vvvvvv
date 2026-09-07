@@ -1,4 +1,4 @@
-name: Build iOS — Noor Al-Islam
+name: Build iOS - Noor Al-Islam
 
 on:
   workflow_dispatch:
@@ -15,12 +15,17 @@ env:
 
 jobs:
   build-ios:
-    name: Build unsigned iOS archive
+    name: Build iOS app
     runs-on: macos-14
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show Apple build environment
+        run: |
+          xcode-select -p
+          xcodebuild -version
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -31,57 +36,65 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Verify ChatGPT server URL
-        run: |
-          if [ -z "${VITE_API_BASE_URL}" ]; then
-            echo "WARNING: VITE_API_BASE_URL is not configured. The ChatGPT advisor will show the server-not-configured message."
-          else
-            echo "ChatGPT server URL is configured."
-          fi
-
       - name: Build web application
         run: npm run build
 
       - name: Sync Capacitor iOS
         run: npx cap sync ios
 
-      - name: Verify iOS native resources
+      - name: Restore native notification sound
         run: |
+          test -f public/audio/adhan-notification.wav
+          cp public/audio/adhan-notification.wav ios/App/App/adhan_notification.wav
           test -f ios/App/App/adhan_notification.wav
-          test -f ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png
-          grep -q 'NSLocationWhenInUseUsageDescription' ios/App/App/Info.plist
-          echo "iOS icon, notification sound, and location permission are present."
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer || true
+      - name: Verify iOS resources
+        run: |
+          test -f ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png
+          test -f ios/App/App/Info.plist
+          grep -q 'NSLocationWhenInUseUsageDescription' ios/App/App/Info.plist
+          echo 'iOS resources verified.'
 
       - name: Resolve Swift packages
         run: xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App
 
-      - name: Build unsigned iOS archive
+      - name: Build iOS app without signing
+        shell: bash
         run: |
-          xcodebuild archive \
+          set -o pipefail
+          xcodebuild build \
             -project ios/App/App.xcodeproj \
             -scheme App \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$RUNNER_TEMP/NoorAlIslam.xcarchive" \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/NoorAlIslamDerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO
+            CODE_SIGN_IDENTITY='' \
+            COMPILER_INDEX_STORE_ENABLE=NO 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log"
 
-      - name: Package unsigned app
+      - name: Print Xcode diagnostics if build fails
+        if: ${{ failure() }}
         run: |
+          echo '========== XCODE ERRORS =========='
+          grep -n -E 'error:|fatal error:|BUILD FAILED|The following build commands failed' "$RUNNER_TEMP/xcodebuild.log" || true
+          echo '========== LAST LOG LINES =========='
+          tail -n 160 "$RUNNER_TEMP/xcodebuild.log" || true
+
+      - name: Package unsigned iOS app
+        run: |
+          APP_PATH="$RUNNER_TEMP/NoorAlIslamDerivedData/Build/Products/Release-iphoneos/App.app"
+          test -d "$APP_PATH"
           mkdir -p "$RUNNER_TEMP/unsigned-ipa/Payload"
-          cp -R "$RUNNER_TEMP/NoorAlIslam.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/unsigned-ipa/Payload/NoorAlIslam.app"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/unsigned-ipa/Payload/NoorAlIslam.app"
           ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/unsigned-ipa" "$RUNNER_TEMP/NoorAlIslam-unsigned.ipa"
 
-      - name: Upload iOS archive
+      - name: Upload unsigned iOS app
         uses: actions/upload-artifact@v4
         with:
-          name: noor-al-islam-ios-archive-unsigned
-          path: ${{ runner.temp }}/NoorAlIslam.xcarchive
+          name: noor-al-islam-ios-app-unsigned
+          path: ${{ runner.temp }}/NoorAlIslamDerivedData/Build/Products/Release-iphoneos/App.app
           if-no-files-found: error
           retention-days: 14
 
