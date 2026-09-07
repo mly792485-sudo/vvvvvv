@@ -1,1 +1,100 @@
+name: Build iOS — Noor Al-Islam
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+  VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+
+jobs:
+  build-ios:
+    name: Build unsigned iOS archive
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify ChatGPT server URL
+        run: |
+          if [ -z "${VITE_API_BASE_URL}" ]; then
+            echo "WARNING: VITE_API_BASE_URL is not configured. The ChatGPT advisor will show the server-not-configured message."
+          else
+            echo "ChatGPT server URL is configured."
+          fi
+
+      - name: Build web application
+        run: npm run build
+
+      - name: Sync Capacitor iOS
+        run: npx cap sync ios
+
+      - name: Verify iOS native resources
+        run: |
+          test -f ios/App/App/adhan_notification.wav
+          test -f ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-60@3x.png
+          grep -q 'NSLocationWhenInUseUsageDescription' ios/App/App/Info.plist
+          echo "iOS icon, notification sound, and location permission are present."
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer || true
+
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project ios/App/App.xcodeproj -scheme App
+
+      - name: Build unsigned iOS archive
+        run: |
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$RUNNER_TEMP/NoorAlIslam.xcarchive" \
+            -derivedDataPath "$RUNNER_TEMP/NoorAlIslamDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Package unsigned app
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned-ipa/Payload"
+          cp -R "$RUNNER_TEMP/NoorAlIslam.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/unsigned-ipa/Payload/NoorAlIslam.app"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/unsigned-ipa" "$RUNNER_TEMP/NoorAlIslam-unsigned.ipa"
+
+      - name: Upload iOS archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: noor-al-islam-ios-archive-unsigned
+          path: ${{ runner.temp }}/NoorAlIslam.xcarchive
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unsigned IPA package
+        uses: actions/upload-artifact@v4
+        with:
+          name: noor-al-islam-ios-ipa-unsigned
+          path: ${{ runner.temp }}/NoorAlIslam-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+# Important:
+# This workflow intentionally creates an UNSIGNED archive and an unsigned IPA package.
+# An unsigned IPA cannot be installed on a real iPhone or uploaded to App Store Connect.
+# To create a distributable IPA, signing must be added with your Apple certificate,
+# provisioning profile, Team ID, and App Store Connect credentials. Never commit those files.
